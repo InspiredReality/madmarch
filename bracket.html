@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>2026 March Madness – My Picks</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d1117;
+      color: #e6edf3;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      font-size: 11px;
+      min-height: 100vh;
+      padding: 16px 8px;
+    }
+
+    h1 {
+      text-align: center;
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: #ffd700;
+      margin-bottom: 6px;
+    }
+
+    .subtitle {
+      text-align: center;
+      color: #8b949e;
+      font-size: 12px;
+      margin-bottom: 12px;
+    }
+
+    .legend {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: #8b949e;
+    }
+
+    .legend-swatch {
+      width: 16px;
+      height: 16px;
+      border-radius: 3px;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+
+    .swatch-fav   { background: linear-gradient(135deg, #ffd700, #ffb300); }
+    .swatch-upset { background: linear-gradient(135deg, #ff6b35, #e64a19); }
+    .swatch-normal { background: #161b22; border: 1px solid #30363d; }
+
+    /* ─── Outer wrapper ─────────────────────────────────────────── */
+    .bracket-outer {
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      gap: 0;
+      overflow-x: auto;
+      padding-bottom: 16px;
+    }
+
+    /* ─── Left side (East top, South bottom) and Right side ──────── */
+    .half {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .region-block {
+      display: flex;
+    }
+
+    .half.right .region-block {
+      flex-direction: row-reverse;
+    }
+
+    /* ─── Region label ───────────────────────────────────────────── */
+    .region-label {
+      writing-mode: vertical-lr;
+      text-transform: uppercase;
+      font-weight: 800;
+      font-size: 9px;
+      letter-spacing: 2px;
+      color: #8b949e;
+      padding: 6px 4px;
+      text-align: center;
+      user-select: none;
+    }
+
+    .region-label.east   { color: #58a6ff; }
+    .region-label.west   { color: #3fb950; }
+    .region-label.south  { color: #f78166; }
+    .region-label.midwest { color: #d2a8ff; }
+
+    /* ─── Round column ───────────────────────────────────────────── */
+    .round-col {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-around;
+      width: 148px;
+      min-height: 352px; /* 8 × 44px */
+      position: relative;
+    }
+
+    /* R2 / S16 / E8 shrink because fewer slots needed */
+    .round-col.r2  { min-height: 352px; width: 130px; }
+    .round-col.s16 { min-height: 352px; width: 130px; }
+    .round-col.e8  { min-height: 352px; width: 130px; }
+
+    /* ─── Match (two-team unit) ───────────────────────────────────── */
+    .match {
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+
+    /* Connector: right border (for left side) */
+    .half.left .match::after {
+      content: '';
+      position: absolute;
+      right: -1px;
+      top: 25%;
+      height: 50%;
+      width: 0;
+      border-right: 2px solid #30363d;
+      border-top: 2px solid #30363d;
+      border-bottom: 2px solid #30363d;
+      border-radius: 0 3px 3px 0;
+      z-index: 0;
+    }
+
+    /* Connector: left border (for right side) */
+    .half.right .match::after {
+      content: '';
+      position: absolute;
+      left: -1px;
+      top: 25%;
+      height: 50%;
+      width: 0;
+      border-left: 2px solid #30363d;
+      border-top: 2px solid #30363d;
+      border-bottom: 2px solid #30363d;
+      border-radius: 3px 0 0 3px;
+      z-index: 0;
+    }
+
+    /* No connector for last round before center */
+    .half.left  .e8  .match::after { display: none; }
+    .half.right .e8  .match::after { display: none; }
+
+    /* ─── Team slot ───────────────────────────────────────────────── */
+    .team {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 0 6px;
+      height: 22px;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      position: relative;
+      z-index: 1;
+      transition: background 0.15s;
+    }
+
+    .team:first-child {
+      border-radius: 3px 3px 0 0;
+      border-bottom: none;
+    }
+
+    .team:last-child {
+      border-radius: 0 0 3px 3px;
+    }
+
+    .seed {
+      font-size: 9px;
+      font-weight: 700;
+      color: #8b949e;
+      min-width: 14px;
+      text-align: right;
+      flex-shrink: 0;
+    }
+
+    .name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+      font-size: 10.5px;
+    }
+
+    /* ─── Pick highlights ─────────────────────────────────────────── */
+    .team.pick-fav {
+      background: linear-gradient(90deg, #3a2d00, #4a3800);
+      border-color: #ffd700;
+      color: #ffd700;
+      font-weight: 700;
+    }
+
+    .team.pick-fav .seed { color: #b8960c; }
+
+    .team.pick-upset {
+      background: linear-gradient(90deg, #3a1500, #4a1f00);
+      border-color: #ff6b35;
+      color: #ff6b35;
+      font-weight: 700;
+    }
+
+    .team.pick-upset .seed { color: #bf4b23; }
+
+    /* ─── Empty slot (later rounds) ──────────────────────────────── */
+    .team.empty {
+      color: #30363d;
+      border-color: #21262d;
+      background: #0d1117;
+    }
+
+    .team.empty .seed { color: #21262d; }
+
+    /* ─── Separator between connector of two sides ──────────────── */
+    .round-connector {
+      width: 20px;
+      display: flex;
+      align-items: center;
+    }
+
+    /* ─── Center / Finals column ─────────────────────────────────── */
+    .center-col {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 0 16px;
+      gap: 8px;
+      min-height: 724px; /* 2 × 352px + 12px gap + breathing */
+    }
+
+    .finals-label {
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: #8b949e;
+      text-align: center;
+      margin-bottom: 4px;
+    }
+
+    .finals-match {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .championship-area {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .trophy {
+      font-size: 28px;
+      text-align: center;
+      margin-bottom: 4px;
+    }
+
+    .champ-slot {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .champ-box {
+      width: 130px;
+      height: 28px;
+      background: #1c2128;
+      border: 2px solid #ffd700;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      color: #ffd700;
+      font-weight: 700;
+      letter-spacing: 1px;
+    }
+
+    .ff-match {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      margin: 4px 0;
+    }
+
+    .ff-team {
+      width: 130px;
+      height: 26px;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      color: #8b949e;
+    }
+
+    .ff-team:first-child { border-radius: 3px 3px 0 0; border-bottom: none; }
+    .ff-team:last-child  { border-radius: 0 0 3px 3px; }
+
+    .vs-divider {
+      text-align: center;
+      font-size: 9px;
+      font-weight: 700;
+      color: #444;
+      margin: 2px 0;
+    }
+
+    .round-header {
+      font-size: 8px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: #8b949e;
+      text-align: center;
+      padding-bottom: 4px;
+      font-weight: 600;
+    }
+
+    /* ─── Howard note ─────────────────────────────────────────────── */
+    .note {
+      text-align: center;
+      color: #8b949e;
+      font-size: 11px;
+      margin-top: 10px;
+      background: #1c2128;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 8px 16px;
+      display: inline-block;
+    }
+
+    .note-wrap {
+      text-align: center;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+
+<h1>2026 NCAA Tournament</h1>
+<p class="subtitle">My Bracket Picks</p>
+
+<div class="legend">
+  <div class="legend-item">
+    <div class="legend-swatch swatch-fav"></div>
+    <span>My pick (favorite)</span>
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch swatch-upset"></div>
+    <span>My pick (upset)</span>
+  </div>
+  <div class="legend-item">
+    <div class="legend-swatch swatch-normal"></div>
+    <span>Not picked</span>
+  </div>
+</div>
+
+<div id="bracket-root"></div>
+
+<div class="note-wrap">
+  <span class="note">
+    ⚠ <strong>Howard</strong> was not found in the 2026 bracket field and has been omitted.
+    &nbsp;|&nbsp; <strong>Wisconsin</strong> noted with — (uncertain pick) but highlighted.
+  </span>
+</div>
+
+<script>
+// ─── Bracket data ───────────────────────────────────────────────────
+// Each region: ordered as it appears top-to-bottom in standard bracket
+// Matchups: [1v16, 8v9, 5v12, 4v13, 6v11, 3v14, 7v10, 2v15]
+const regions = {
+  East: [
+    {s:1,  t:'Duke'},            {s:16, t:'Siena'},
+    {s:8,  t:'Ohio State'},      {s:9,  t:'TCU'},
+    {s:5,  t:"St. John's"},      {s:12, t:'Northern Iowa'},
+    {s:4,  t:'Kansas'},          {s:13, t:'California Baptist'},
+    {s:6,  t:'Louisville'},      {s:11, t:'South Florida'},
+    {s:3,  t:'Michigan State'},  {s:14, t:'North Dakota State'},
+    {s:7,  t:'UCLA'},            {s:10, t:'UCF'},
+    {s:2,  t:'UConn'},           {s:15, t:'Furman'},
+  ],
+  West: [
+    {s:1,  t:'Arizona'},         {s:16, t:'LIU'},
+    {s:8,  t:'Villanova'},       {s:9,  t:'Utah State'},
+    {s:5,  t:'Wisconsin'},       {s:12, t:'High Point'},
+    {s:4,  t:'Arkansas'},        {s:13, t:'Hawaii'},
+    {s:6,  t:'BYU'},             {s:11, t:'Texas'},
+    {s:3,  t:'Gonzaga'},         {s:14, t:'Kennesaw State'},
+    {s:7,  t:'Miami (FL)'},      {s:10, t:'Missouri'},
+    {s:2,  t:'Purdue'},          {s:15, t:'Queens'},
+  ],
+  South: [
+    {s:1,  t:'Florida'},         {s:16, t:'Prairie View A&M'},
+    {s:8,  t:'Clemson'},         {s:9,  t:'Iowa'},
+    {s:5,  t:'Vanderbilt'},      {s:12, t:'McNeese'},
+    {s:4,  t:'Nebraska'},        {s:13, t:'Troy'},
+    {s:6,  t:'North Carolina'},  {s:11, t:'VCU'},
+    {s:3,  t:'Illinois'},        {s:14, t:'Penn'},
+    {s:7,  t:"Saint Mary's"},    {s:10, t:'Texas A&M'},
+    {s:2,  t:'Houston'},         {s:15, t:'Idaho'},
+  ],
+  Midwest: [
+    {s:1,  t:'Michigan'},        {s:16, t:'UMBC'},
+    {s:8,  t:'Georgia'},         {s:9,  t:'Saint Louis'},
+    {s:5,  t:'Texas Tech'},      {s:12, t:'Akron'},
+    {s:4,  t:'Alabama'},         {s:13, t:'Hofstra'},
+    {s:6,  t:'Tennessee'},       {s:11, t:'Miami (OH)'},
+    {s:3,  t:'Virginia'},        {s:14, t:'Wright State'},
+    {s:7,  t:'Kentucky'},        {s:10, t:'Santa Clara'},
+    {s:2,  t:'Iowa State'},      {s:15, t:'Tennessee State'},
+  ],
+};
+
+// ─── User's picks ────────────────────────────────────────────────────
+const favPicks   = new Set(['Illinois','Kansas','Nebraska','Texas Tech','Wisconsin','Louisville']);
+const upsetPicks = new Set(['Hofstra','Wright State','Tennessee State']);
+
+function pickClass(teamName) {
+  if (favPicks.has(teamName))   return 'pick-fav';
+  if (upsetPicks.has(teamName)) return 'pick-upset';
+  return '';
+}
+
+// ─── Build a team slot ───────────────────────────────────────────────
+function teamSlot(team, isTop) {
+  const cls   = team ? pickClass(team.t) : 'empty';
+  const seed  = team ? `<span class="seed">${team.s}</span>` : `<span class="seed">–</span>`;
+  const name  = team ? `<span class="name">${team.t}</span>` : `<span class="name">TBD</span>`;
+  const radius = isTop ? 'border-radius:3px 3px 0 0;border-bottom:none;' : 'border-radius:0 0 3px 3px;';
+  return `<div class="team ${cls}" style="${radius}">${seed}${name}</div>`;
+}
+
+// ─── Build a match (pair of team slots) ─────────────────────────────
+function buildMatch(top, bot) {
+  return `<div class="match">${teamSlot(top, true)}${teamSlot(bot, false)}</div>`;
+}
+
+// ─── Build empty later-round slots ─────────────────────────────────
+function emptyMatch() {
+  return `<div class="match">${teamSlot(null,true)}${teamSlot(null,false)}</div>`;
+}
+
+// ─── Build a round column ────────────────────────────────────────────
+function buildRound(label, matchCount, teams) {
+  const cls = label.toLowerCase().replace(' ','');
+  const roundClass = {
+    'round1':'r1','round2':'r2','sweet16':'s16','elite8':'e8'
+  }[cls] || 'r1';
+
+  let matches = '';
+  if (teams) {
+    // Round 1: pair teams into matchups
+    for (let i = 0; i < teams.length; i += 2) {
+      matches += buildMatch(teams[i], teams[i+1]);
+    }
+  } else {
+    for (let i = 0; i < matchCount; i++) matches += emptyMatch();
+  }
+
+  return `
+    <div style="display:flex;flex-direction:column;align-items:center;gap:0;">
+      <div class="round-header">${label}</div>
+      <div class="round-col ${roundClass}">${matches}</div>
+    </div>`;
+}
+
+// ─── Build one region block (left side) ─────────────────────────────
+function buildRegionLeft(regionName, teams) {
+  const lc = regionName.toLowerCase();
+  return `
+    <div class="region-block">
+      <div class="region-label ${lc}">${regionName}</div>
+      ${buildRound('Round 1', 8, teams)}
+      ${buildRound('Round 2', 4)}
+      ${buildRound('Sweet 16', 2)}
+      ${buildRound('Elite 8', 1)}
+    </div>`;
+}
+
+// ─── Build one region block (right side) ─────────────────────────────
+function buildRegionRight(regionName, teams) {
+  const lc = regionName.toLowerCase();
+  return `
+    <div class="region-block">
+      ${buildRound('Elite 8', 1)}
+      ${buildRound('Sweet 16', 2)}
+      ${buildRound('Round 2', 4)}
+      ${buildRound('Round 1', 8, teams)}
+      <div class="region-label ${lc}">${regionName}</div>
+    </div>`;
+}
+
+// ─── Build center finals column ──────────────────────────────────────
+function buildCenter() {
+  return `
+    <div class="center-col">
+      <div class="finals-label">Final Four</div>
+      <div class="ff-match">
+        <div class="ff-team">TBD (East)</div>
+        <div class="ff-team">TBD (South)</div>
+      </div>
+      <div style="height:32px;"></div>
+      <div class="championship-area">
+        <div class="trophy">🏆</div>
+        <div class="finals-label">Championship</div>
+        <div class="champ-box">2026 Champion</div>
+        <div class="finals-label" style="margin-top:6px;">Apr 6 · San Antonio</div>
+      </div>
+      <div style="height:32px;"></div>
+      <div class="ff-match">
+        <div class="ff-team">TBD (West)</div>
+        <div class="ff-team">TBD (Midwest)</div>
+      </div>
+      <div class="finals-label" style="margin-top:8px;">Final Four</div>
+    </div>`;
+}
+
+// ─── Assemble full bracket ───────────────────────────────────────────
+const root = document.getElementById('bracket-root');
+root.innerHTML = `
+  <div class="bracket-outer">
+    <div class="half left">
+      ${buildRegionLeft('East',    regions.East)}
+      ${buildRegionLeft('South',   regions.South)}
+    </div>
+    ${buildCenter()}
+    <div class="half right">
+      ${buildRegionRight('West',    regions.West)}
+      ${buildRegionRight('Midwest', regions.Midwest)}
+    </div>
+  </div>
+`;
+</script>
+</body>
+</html>
