@@ -603,23 +603,7 @@ function renderBracket(losers = new Set()) {
 // Initial render with no results yet
 renderBracket();
 
-// ─── Known results (seeded from NCAA.com, updated each round) ────────
-// Winners advance (green ✓), losers are eliminated (red ✗).
-// These load instantly; ESPN sync adds any results not listed here.
-const KNOWN = {
-  winners: new Set([
-    // South R1 (Mar 19-20)
-    'Iowa','Vanderbilt','Nebraska','VCU','Illinois','Texas A&M',
-    // South R1 game still in progress at screenshot time — add once final:
-    // 'Florida' or 'Prairie View A&M'
-  ]),
-  losers: new Set([
-    // South R1 (Mar 19-20)
-    'Clemson','McNeese','Troy','North Carolina','Penn',"Saint Mary's",
-  ]),
-};
-
-// ─── Live sync via ESPN public scoreboard API ─────────────────────────
+// ─── Live sync via NCAA bracket API (ncaa.com MML data) ──────────────
 async function syncLive() {
   const btn    = document.getElementById('refreshBtn');
   const icon   = document.getElementById('spinIcon');
@@ -631,43 +615,28 @@ async function syncLive() {
   status.textContent = 'Fetching live results…';
 
   try {
-    const winners = new Set(KNOWN.winners);
-    const losers  = new Set(KNOWN.losers);
+    const winners = new Set();
+    const losers  = new Set();
     const sourcesHit = [];
 
-    // ── Source 1: henrygd NCAA API (mirrors ncaa.com, CORS-enabled) ────────
-    // Try the bracket endpoint first (one request = all rounds)
+    // ── Source 1: henrygd NCAA API (CORS proxy for ncaa.com MML bracket) ──
+    // Single request returns all rounds — final games have gameState:"F" + isWinner
     const bracketData = await fetch('https://ncaa-api.henrygd.me/brackets/basketball-men/d1/2026')
       .then(r => r.ok ? r.json() : null).catch(() => null);
 
     if (bracketData) {
       const n = parseNCAA(bracketData, winners, losers);
-      if (n > 0) sourcesHit.push(`NCAA bracket (${n} results)`);
+      if (n > 0) sourcesHit.push(`NCAA (${n} results)`);
     }
 
-    // Also hit the per-day scoreboard for any games not in the bracket feed
-    // NCAA.com URL format: /scoreboard/.../YYYY/MM/DD/0-scoreboard.json
-    const tourneyDates = [
-      '03/18','03/19','03/20','03/21','03/22','03/23',
-      '03/26','03/27','03/28','03/29','04/04','04/05','04/06',
-    ];
-    const scoreboards = await Promise.all(
-      tourneyDates.map(d =>
-        fetch(`https://ncaa-api.henrygd.me/scoreboard/basketball-men/d1/2026/${d}/0-scoreboard.json`)
-          .then(r => r.ok ? r.json() : null).catch(() => null)
-      )
-    );
-    let sbCount = 0;
-    for (const sb of scoreboards) { if (sb) sbCount += parseNCAA(sb, winners, losers); }
-    if (sbCount > 0) sourcesHit.push(`NCAA scoreboard (${sbCount} games)`);
-
-    // ── Source 2: ESPN (no groups filter — catches what NCAA misses) ────────
+    // ── Source 2: ESPN tournament scoreboard (groups=100 = NCAA tournament only) ──
+    // Catches live in-progress games the bracket feed may not reflect yet
+    const espnBase = 'https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?groups=100&limit=200';
     const espnUrls = [
-      // today's live games (no date param)
-      'https://site.api.espn.com/apis/v2/sports/basketball/mens-college-basketball/scoreboard?limit=200',
-      ...['20260319','20260320','20260321','20260322','20260326',
+      espnBase,
+      ...['20260319','20260320','20260321','20260322','20260323','20260326',
           '20260327','20260328','20260329','20260404','20260405','20260406'].map(d =>
-        `https://site.api.espn.com/apis/v2/sports/basketball/mens-college-basketball/scoreboard?dates=${d}&limit=200`
+        `${espnBase}&dates=${d}`
       ),
     ];
     const espnPages = await Promise.all(
@@ -705,16 +674,15 @@ async function syncLive() {
     renderBracket(losers);
     const matched = applyResults(winners, losers);
     const now = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
-    const src  = sourcesHit.length ? ` · ${sourcesHit.join(', ')}` : ' · known results only';
+    const src  = sourcesHit.length ? ` · ${sourcesHit.join(', ')}` : ' · no results found';
     status.className = 'sync-status ok';
     status.textContent = `Synced ${now} — ${matched.won} advancing ✓, ${matched.lost} eliminated ✗${src}`;
 
   } catch (err) {
-    // Even on error, apply what we know
-    renderBracket(new Set(KNOWN.losers));
-    applyResults(new Set(KNOWN.winners), new Set(KNOWN.losers));
+    renderBracket(new Set());
+    applyResults(new Set(), new Set());
     status.className = 'sync-status error';
-    status.textContent = `ESPN unreachable — showing known results only`;
+    status.textContent = `Sync failed — check console for details`;
     console.error('syncLive error:', err);
   } finally {
     btn.disabled = false;
@@ -749,7 +717,7 @@ function parseNCAA(data, winners, losers) {
         // Explicit winner field, or fall back to score comparison
         const hScore = parseFloat(home.score ?? home.currentScore ?? 0);
         const aScore = parseFloat(away.score ?? away.currentScore ?? 0);
-        const hWon   = home.winner === true || home.winner === 'W'
+        const hWon   = home.isWinner === true || home.winner === true || home.winner === 'W'
                        || (hScore > 0 && aScore > 0 && hScore > aScore);
         if (hName) { (hWon ? winners : losers).add(hName); count++; }
         if (aName) { (hWon ? losers : winners).add(aName); count++; }
@@ -763,7 +731,7 @@ function parseNCAA(data, winners, losers) {
           : null;
         for (const t of node.teams) {
           const nm  = t.names?.short ?? t.name ?? t.nameShort ?? '';
-          const won = t.winner === true || t.winner === 'W' || t === winTeam;
+          const won = t.isWinner === true || t.winner === true || t.winner === 'W' || t === winTeam;
           if (nm) { (won ? winners : losers).add(nm); count++; }
         }
         return;
