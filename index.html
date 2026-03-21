@@ -126,6 +126,63 @@
     .sync-status.error { color: #f78166; }
     .sync-status.ok    { color: #3fb950; }
 
+    /* ─── Calcutta profit table ──────────────────────────────────── */
+    .profit-panel {
+      max-width: 520px;
+      margin: 14px auto 6px;
+    }
+
+    .profit-panel h2 {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: #ffd700;
+      margin-bottom: 6px;
+      text-align: center;
+    }
+
+    .profit-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+    }
+
+    .profit-table th {
+      background: #161b22;
+      color: #8b949e;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      padding: 5px 10px;
+      border-bottom: 1px solid #30363d;
+      text-align: right;
+    }
+
+    .profit-table th:first-child { text-align: left; }
+
+    .profit-table td {
+      padding: 5px 10px;
+      border-bottom: 1px solid #21262d;
+      text-align: right;
+      color: #e6edf3;
+    }
+
+    .profit-table td:first-child { text-align: left; font-weight: 600; }
+
+    .profit-table tbody tr:hover { background: #161b22; }
+
+    .profit-table tfoot td {
+      border-top: 1px solid #30363d;
+      border-bottom: none;
+      font-weight: 700;
+      background: #161b22;
+    }
+
+    .profit-pos { color: #3fb950; }
+    .profit-neg { color: #f78166; }
+    .profit-zero { color: #8b949e; }
+
     /* ─── Scrollable bracket wrapper ────────────────────────────── */
     .bracket-scroll {
       width: 100%;
@@ -407,6 +464,23 @@
 
 <div class="sync-status" id="syncStatus">Not synced yet — hit Sync to load live results</div>
 
+<div class="profit-panel" id="profitPanel" style="display:none">
+  <h2>Calcutta Profit Tracker</h2>
+  <table class="profit-table">
+    <thead>
+      <tr>
+        <th>Team</th>
+        <th>Cost</th>
+        <th>Wins</th>
+        <th>Earnings</th>
+        <th>Profit</th>
+      </tr>
+    </thead>
+    <tbody id="profitBody"></tbody>
+    <tfoot id="profitFoot"></tfoot>
+  </table>
+</div>
+
 <div class="bracket-scroll">
   <div id="bracket-root"></div>
 </div>
@@ -568,6 +642,109 @@ function buildCenter(ff) {
     </div>`;
 }
 
+// ─── Calcutta profit tracker ──────────────────────────────────────────
+const ROUND_PRIZE = [8.4, 16.8, 33.6, 67.2, 134.4, 268.8]; // R1 win … Championship win
+
+const calcuttaCosts = {
+  'Illinois':   45,
+  'Kansas':     20,
+  'Nebraska':   24,
+  'Wisconsin':  15,
+  'Louisville': 20,
+  'Texas Tech': 25,
+};
+
+// Returns a map of { teamName → wins } for every team that advanced
+function buildTeamWins(losers) {
+  const allRounds = {
+    East:    computeRounds(regions.East,    losers),
+    South:   computeRounds(regions.South,   losers),
+    West:    computeRounds(regions.West,    losers),
+    Midwest: computeRounds(regions.Midwest, losers),
+  };
+
+  const wins = {};
+  const bump = (team, n) => { if (team) wins[team.t] = Math.max(wins[team.t] ?? 0, n); };
+
+  // Scan each region: r2 appearances = 1 win, s16 = 2, e8 = 3
+  for (const rounds of Object.values(allRounds)) {
+    for (const [t, b] of rounds.r2)  { bump(t, 1); bump(b, 1); }
+    for (const [t, b] of rounds.s16) { bump(t, 2); bump(b, 2); }
+    const [e8t, e8b] = rounds.e8[0];
+    bump(e8t, 3); bump(e8b, 3);
+  }
+
+  // E8 winners (went to Final Four) = 4 wins
+  // FF pairings: East vs South, West vs Midwest
+  const e8Win = (rounds) => {
+    const [t, b] = rounds.e8[0];
+    if (!t || !b) return null;
+    if ([...losers].some(l => nameMatches(t.t, l))) return b;
+    if ([...losers].some(l => nameMatches(b.t, l))) return t;
+    return null;
+  };
+  const ffWin = (a, b) => {
+    if (!a || !b) return null;
+    if ([...losers].some(l => nameMatches(a.t, l))) return b;
+    if ([...losers].some(l => nameMatches(b.t, l))) return a;
+    return null;
+  };
+
+  const e8East = e8Win(allRounds.East);    bump(e8East,    4);
+  const e8South = e8Win(allRounds.South);  bump(e8South,   4);
+  const e8West  = e8Win(allRounds.West);   bump(e8West,    4);
+  const e8Mid   = e8Win(allRounds.Midwest);bump(e8Mid,     4);
+
+  const ff1 = ffWin(e8East,  e8South); bump(ff1, 5); // East/South FF winner
+  const ff2 = ffWin(e8West,  e8Mid);   bump(ff2, 5); // West/Midwest FF winner
+  const champ = ffWin(ff1, ff2);       bump(champ, 6);
+
+  return wins;
+}
+
+function renderProfitTable(losers) {
+  const teamWins = buildTeamWins(losers);
+
+  // Match calcutta team name → wins using fuzzy nameMatches
+  const winsFor = (name) => {
+    for (const [bracketName, w] of Object.entries(teamWins)) {
+      if (nameMatches(name, bracketName) || nameMatches(bracketName, name)) return w;
+    }
+    return 0;
+  };
+
+  let totalCost = 0, totalEarnings = 0;
+  const rows = Object.entries(calcuttaCosts).map(([name, cost]) => {
+    const w        = winsFor(name);
+    const earnings = ROUND_PRIZE.slice(0, w).reduce((a, b) => a + b, 0);
+    const profit   = earnings - cost;
+    totalCost     += cost;
+    totalEarnings += earnings;
+
+    const profitCls = profit > 0 ? 'profit-pos' : profit < 0 ? 'profit-neg' : 'profit-zero';
+    const profitStr = (profit >= 0 ? '+' : '') + '$' + Math.abs(profit).toFixed(2);
+    return `<tr>
+      <td>${name}</td>
+      <td>$${cost.toFixed(2)}</td>
+      <td>${w}</td>
+      <td>$${earnings.toFixed(2)}</td>
+      <td class="${profitCls}">${profitStr}</td>
+    </tr>`;
+  });
+
+  const totalProfit   = totalEarnings - totalCost;
+  const totalCls      = totalProfit > 0 ? 'profit-pos' : totalProfit < 0 ? 'profit-neg' : 'profit-zero';
+  const totalProfitStr = (totalProfit >= 0 ? '+' : '') + '$' + Math.abs(totalProfit).toFixed(2);
+
+  document.getElementById('profitBody').innerHTML = rows.join('');
+  document.getElementById('profitFoot').innerHTML = `<tr>
+    <td colspan="3">Total</td>
+    <td>$${totalEarnings.toFixed(2)}</td>
+    <td class="${totalCls}">${totalProfitStr}</td>
+  </tr>`;
+  document.getElementById('profitPanel').style.display = '';
+}
+
 // ─── Full bracket render (called initially + after each sync) ─────────
 function renderBracket(losers = new Set()) {
   const east    = computeRounds(regions.East,    losers);
@@ -672,6 +849,7 @@ async function syncLive() {
     console.log('[sync] losers:',  [...losers].slice(0,15));
 
     renderBracket(losers);
+    renderProfitTable(losers);
     const matched = applyResults(winners, losers);
     const now = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
     const src  = sourcesHit.length ? ` · ${sourcesHit.join(', ')}` : ' · no results found';
@@ -680,6 +858,7 @@ async function syncLive() {
 
   } catch (err) {
     renderBracket(new Set());
+    renderProfitTable(new Set());
     applyResults(new Set(), new Set());
     status.className = 'sync-status error';
     status.textContent = `Sync failed — check console for details`;
