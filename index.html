@@ -646,13 +646,14 @@ async function syncLive() {
     }
 
     // Also hit the per-day scoreboard for any games not in the bracket feed
+    // NCAA.com URL format: /scoreboard/.../YYYY/MM/DD/0-scoreboard.json
     const tourneyDates = [
       '03/18','03/19','03/20','03/21','03/22','03/23',
       '03/26','03/27','03/28','03/29','04/04','04/05','04/06',
     ];
     const scoreboards = await Promise.all(
       tourneyDates.map(d =>
-        fetch(`https://ncaa-api.henrygd.me/scoreboard/basketball-men/d1/2026/${d}/scoreboard.json`)
+        fetch(`https://ncaa-api.henrygd.me/scoreboard/basketball-men/d1/2026/${d}/0-scoreboard.json`)
           .then(r => r.ok ? r.json() : null).catch(() => null)
       )
     );
@@ -743,19 +744,26 @@ function parseNCAA(data, winners, losers) {
       const home = node.teams?.home ?? node.home;
       const away = node.teams?.away ?? node.away;
       if (home && away) {
-        const hName = home.names?.short ?? home.name ?? home.nameShort ?? '';
-        const aName = away.names?.short ?? away.name ?? away.nameShort ?? '';
-        const hWon  = home.winner === true || home.winner === 'W';
-        const aWon  = away.winner === true || away.winner === 'W';
+        const hName  = home.names?.short ?? home.name ?? home.nameShort ?? '';
+        const aName  = away.names?.short ?? away.name ?? away.nameShort ?? '';
+        // Explicit winner field, or fall back to score comparison
+        const hScore = parseFloat(home.score ?? home.currentScore ?? 0);
+        const aScore = parseFloat(away.score ?? away.currentScore ?? 0);
+        const hWon   = home.winner === true || home.winner === 'W'
+                       || (hScore > 0 && aScore > 0 && hScore > aScore);
         if (hName) { (hWon ? winners : losers).add(hName); count++; }
-        if (aName) { (aWon ? winners : losers).add(aName); count++; }
+        if (aName) { (hWon ? losers : winners).add(aName); count++; }
         return; // don't recurse into resolved game
       }
       // Try array-of-teams structure
       if (Array.isArray(node.teams)) {
+        const scored = node.teams.filter(t => parseFloat(t.score ?? 0) > 0);
+        const winTeam = scored.length === 2
+          ? (parseFloat(scored[0].score) > parseFloat(scored[1].score) ? scored[0] : scored[1])
+          : null;
         for (const t of node.teams) {
-          const nm = t.names?.short ?? t.name ?? t.nameShort ?? '';
-          const won = t.winner === true || t.winner === 'W';
+          const nm  = t.names?.short ?? t.name ?? t.nameShort ?? '';
+          const won = t.winner === true || t.winner === 'W' || t === winTeam;
           if (nm) { (won ? winners : losers).add(nm); count++; }
         }
         return;
@@ -784,9 +792,11 @@ function nameMatches(ourName, espnName) {
   // Strip parentheticals like "(CA)", "(OH)", "(FL)", "(NY)"
   const eClean = e.replace(/\([^)]*\)/g, '').trim();
   if (o === eClean) return true;
-  // One contains the other (minimum length guard to avoid false matches)
-  if (o.length >= 4 && e.startsWith(o)) return true;
-  if (e.length >= 4 && o.startsWith(e)) return true;
+  // Prefix match — guard requires ≥9 chars to avoid "Iowa"↔"Iowa State",
+  // "Texas"↔"Texas A&M", "Michigan"↔"Michigan State" false positives.
+  // Short names (UCLA, UConn, etc.) rely on the exact-match path above.
+  if (o.length >= 9 && e.startsWith(o)) return true;
+  if (e.length >= 9 && o.startsWith(e)) return true;
   // "St. John's" ↔ "Saint John's" etc.
   const abbrevMap = {
     'st ': 'saint ', 'mt ': 'mount ', 'n ': 'north ', 's ': 'south ',
