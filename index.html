@@ -411,13 +411,6 @@
   <div id="bracket-root"></div>
 </div>
 
-<div class="note-wrap">
-  <span class="note">
-    ❌ <strong>Howard Bison</strong> was eliminated in the First Four and did not reach the main bracket.
-    &nbsp;|&nbsp; <strong>Wisconsin</strong> noted with — (uncertain pick) but highlighted.
-  </span>
-</div>
-
 <script>
 // ─── Bracket data ─────────────────────────────────────────────────────
 const regions = {
@@ -490,19 +483,10 @@ function buildMatch(top, bot) {
   return `<div class="match">${teamSlot(top, true)}${teamSlot(bot, false)}</div>`;
 }
 
-function emptyMatch() {
-  return `<div class="match">${teamSlot(null,true)}${teamSlot(null,false)}</div>`;
-}
-
-function buildRound(label, matchCount, teams) {
-  const cls = label.toLowerCase().replace(' ','');
+function buildRound(label, matchups) {
+  const cls = label.toLowerCase().replace(' ', '');
   const roundClass = { 'round1':'r1','round2':'r2','sweet16':'s16','elite8':'e8' }[cls] || 'r1';
-  let matches = '';
-  if (teams) {
-    for (let i = 0; i < teams.length; i += 2) matches += buildMatch(teams[i], teams[i+1]);
-  } else {
-    for (let i = 0; i < matchCount; i++) matches += emptyMatch();
-  }
+  const matches = matchups.map(([t, b]) => buildMatch(t, b)).join('');
   return `
     <div style="display:flex;flex-direction:column;align-items:center;gap:0;">
       <div class="round-header">${label}</div>
@@ -510,37 +494,63 @@ function buildRound(label, matchCount, teams) {
     </div>`;
 }
 
-function buildRegionLeft(regionName, teams) {
+// ─── Compute all rounds from R1 seeds + known results ────────────────
+// For each round, determine which team advanced by checking who their
+// opponent was eliminated (appears in losers).
+function computeRounds(teams16, losers) {
+  const out = name => [...losers].some(l => nameMatches(name, l));
+
+  // Who won the game between t1 and t2?
+  function winner(t1, t2) {
+    if (!t1 || !t2) return null;    // one side TBD → can't resolve
+    if (out(t1.t)) return t2;
+    if (out(t2.t)) return t1;
+    return null;                    // game not yet played
+  }
+
+  const r1 = Array.from({length: 8}, (_, i) => [teams16[i*2], teams16[i*2+1]]);
+  const r2  = Array.from({length: 4}, (_, i) => [winner(r1[i*2][0], r1[i*2][1]),
+                                                   winner(r1[i*2+1][0], r1[i*2+1][1])]);
+  const s16 = Array.from({length: 2}, (_, i) => [winner(r2[i*2][0], r2[i*2][1]),
+                                                   winner(r2[i*2+1][0], r2[i*2+1][1])]);
+  const e8  = [[winner(s16[0][0], s16[0][1]), winner(s16[1][0], s16[1][1])]];
+  return { r1, r2, s16, e8 };
+}
+
+function buildRegionLeft(regionName, rounds) {
   const lc = regionName.toLowerCase();
   return `
     <div class="region-block">
       <div class="region-label ${lc}">${regionName}</div>
-      ${buildRound('Round 1', 8, teams)}
-      ${buildRound('Round 2', 4)}
-      ${buildRound('Sweet 16', 2)}
-      ${buildRound('Elite 8', 1)}
+      ${buildRound('Round 1', rounds.r1)}
+      ${buildRound('Round 2', rounds.r2)}
+      ${buildRound('Sweet 16', rounds.s16)}
+      ${buildRound('Elite 8', rounds.e8)}
     </div>`;
 }
 
-function buildRegionRight(regionName, teams) {
+function buildRegionRight(regionName, rounds) {
   const lc = regionName.toLowerCase();
   return `
     <div class="region-block">
-      ${buildRound('Elite 8', 1)}
-      ${buildRound('Sweet 16', 2)}
-      ${buildRound('Round 2', 4)}
-      ${buildRound('Round 1', 8, teams)}
+      ${buildRound('Elite 8', rounds.e8)}
+      ${buildRound('Sweet 16', rounds.s16)}
+      ${buildRound('Round 2', rounds.r2)}
+      ${buildRound('Round 1', rounds.r1)}
       <div class="region-label ${lc}">${regionName}</div>
     </div>`;
 }
 
-function buildCenter() {
+function buildCenter(ff) {
+  const slot = (team, label) => team
+    ? `<div class="ff-team">${team.s} ${team.t}</div>`
+    : `<div class="ff-team">TBD (${label})</div>`;
   return `
     <div class="center-col">
       <div class="finals-label">Final Four</div>
       <div class="ff-match">
-        <div class="ff-team">TBD (East)</div>
-        <div class="ff-team">TBD (South)</div>
+        ${slot(ff.east,    'East')}
+        ${slot(ff.south,   'South')}
       </div>
       <div style="height:32px;"></div>
       <div class="championship-area">
@@ -551,27 +561,47 @@ function buildCenter() {
       </div>
       <div style="height:32px;"></div>
       <div class="ff-match">
-        <div class="ff-team">TBD (West)</div>
-        <div class="ff-team">TBD (Midwest)</div>
+        ${slot(ff.west,    'West')}
+        ${slot(ff.midwest, 'Midwest')}
       </div>
       <div class="finals-label" style="margin-top:8px;">Final Four</div>
     </div>`;
 }
 
-// ─── Render bracket ───────────────────────────────────────────────────
-document.getElementById('bracket-root').innerHTML = `
-  <div class="bracket-outer">
-    <div class="half left">
-      ${buildRegionLeft('East',  regions.East)}
-      ${buildRegionLeft('South', regions.South)}
+// ─── Full bracket render (called initially + after each sync) ─────────
+function renderBracket(losers = new Set()) {
+  const east    = computeRounds(regions.East,    losers);
+  const south   = computeRounds(regions.South,   losers);
+  const west    = computeRounds(regions.West,     losers);
+  const midwest = computeRounds(regions.Midwest,  losers);
+
+  // Final Four teams are E8 winners — determined the same way
+  const ffWinner = (rounds, opponentLosers) => {
+    const [t, b] = rounds.e8[0];
+    if (!t || !b) return null;
+    if ([...opponentLosers].some(l => nameMatches(t.t, l))) return b;
+    if ([...opponentLosers].some(l => nameMatches(b.t, l))) return t;
+    return null;
+  };
+
+  document.getElementById('bracket-root').innerHTML = `
+    <div class="bracket-outer">
+      <div class="half left">
+        ${buildRegionLeft('East',  east)}
+        ${buildRegionLeft('South', south)}
+      </div>
+      ${buildCenter({ east: ffWinner(east, losers), south: ffWinner(south, losers),
+                      west: ffWinner(west, losers), midwest: ffWinner(midwest, losers) })}
+      <div class="half right">
+        ${buildRegionRight('West',    west)}
+        ${buildRegionRight('Midwest', midwest)}
+      </div>
     </div>
-    ${buildCenter()}
-    <div class="half right">
-      ${buildRegionRight('West',    regions.West)}
-      ${buildRegionRight('Midwest', regions.Midwest)}
-    </div>
-  </div>
-`;
+  `;
+}
+
+// Initial render with no results yet
+renderBracket();
 
 // ─── Known results (seeded from NCAA.com, updated each round) ────────
 // Winners advance (green ✓), losers are eliminated (red ✗).
@@ -666,6 +696,8 @@ async function syncLive() {
     console.log('[sync] winners sample:', [...winners].slice(0, 10));
     console.log('[sync] losers sample:', [...losers].slice(0, 10));
 
+    // Re-render bracket with updated round advancement, then apply styling
+    renderBracket(losers);
     const matched = applyResults(winners, losers);
     const now = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
     const espnNote = espnEventCount > 0 ? ` (+${espnEventCount} ESPN events)` : ' (ESPN unavailable – using known results)';
@@ -674,6 +706,7 @@ async function syncLive() {
 
   } catch (err) {
     // Even on error, apply what we know
+    renderBracket(new Set(KNOWN.losers));
     applyResults(new Set(KNOWN.winners), new Set(KNOWN.losers));
     status.className = 'sync-status error';
     status.textContent = `ESPN unreachable — showing known results only`;
