@@ -70,7 +70,7 @@
     .swatch-upset  { background: linear-gradient(135deg, #ff6b35, #e64a19); }
     .swatch-normal { background: #161b22; border: 1px solid #30363d; }
     .swatch-won    { background: #0d1117; border: 1px solid #3fb950; }
-    .swatch-lost   { background: #0d1117; border: 1px solid #444; opacity: 0.5; }
+    .swatch-lost   { background: #1a0a0a; border: 1px solid #8b1a1a; }
 
     .divider { color: #30363d; }
 
@@ -152,9 +152,6 @@
       display: flex;
     }
 
-    .half.right .region-block {
-      flex-direction: row-reverse;
-    }
 
     /* ─── Region label ───────────────────────────────────────────── */
     .region-label {
@@ -274,13 +271,6 @@
     }
     .team.pick-fav .seed { color: #b8960c; }
 
-    .team.pick-upset {
-      background: linear-gradient(90deg, #3a1500, #4a1f00);
-      border-color: #ff6b35;
-      color: #ff6b35;
-      font-weight: 700;
-    }
-    .team.pick-upset .seed { color: #bf4b23; }
 
     /* ─── Live result states ─────────────────────────────────────── */
     .team.live-won {
@@ -289,13 +279,13 @@
     }
 
     .team.live-lost {
-      opacity: 0.35;
+      background: #1a0a0a;
+      border-color: #8b1a1a;
+      color: #f85149;
+      opacity: 0.75;
     }
 
-    .team.live-lost .name {
-      text-decoration: line-through;
-      text-decoration-color: #666;
-    }
+    .team.live-lost .seed { color: #8b1a1a; }
 
     /* ─── Empty slot ─────────────────────────────────────────────── */
     .team.empty {
@@ -403,13 +393,10 @@
       <div class="legend-swatch swatch-fav"></div><span>Fav pick</span>
     </div>
     <div class="legend-item">
-      <div class="legend-swatch swatch-upset"></div><span>Upset pick</span>
-    </div>
-    <div class="legend-item">
       <div class="legend-swatch swatch-won"></div><span>Won ✓</span>
     </div>
     <div class="legend-item">
-      <div class="legend-swatch swatch-lost"></div><span>Eliminated</span>
+      <div class="legend-swatch swatch-lost"></div><span>Eliminated ✗</span>
     </div>
   </div>
   <span class="divider">|</span>
@@ -477,13 +464,13 @@ const regions = {
 };
 
 // ─── User's picks ────────────────────────────────────────────────────
-const favPicks   = new Set(['Illinois','Kansas','Nebraska','Texas Tech','Wisconsin','Louisville']);
-const upsetPicks = new Set(['Hofstra','Wright State','Tennessee State']);
+const favPicks = new Set([
+  'Illinois','Kansas','Nebraska','Texas Tech','Wisconsin','Louisville',
+  'Hofstra','Wright State','Tennessee State',
+]);
 
 function pickClass(name) {
-  if (favPicks.has(name))   return 'pick-fav';
-  if (upsetPicks.has(name)) return 'pick-upset';
-  return '';
+  return favPicks.has(name) ? 'pick-fav' : '';
 }
 
 // ─── Build a team slot ───────────────────────────────────────────────
@@ -586,7 +573,7 @@ document.getElementById('bracket-root').innerHTML = `
   </div>
 `;
 
-// ─── Live sync ────────────────────────────────────────────────────────
+// ─── Live sync via ESPN public scoreboard API ─────────────────────────
 async function syncLive() {
   const btn    = document.getElementById('refreshBtn');
   const icon   = document.getElementById('spinIcon');
@@ -598,48 +585,60 @@ async function syncLive() {
   status.textContent = 'Fetching live results from ESPN…';
 
   try {
-    // ESPN public scoreboard — covers all men's CBB games
-    // We fetch a date range covering the full 2026 tournament
-    const urls = [
-      'https://site.api.espn.com/apis/v2/sports/basketball/mens-college-basketball/scoreboard?dates=20260318&limit=64',
-      'https://site.api.espn.com/apis/v2/sports/basketball/mens-college-basketball/scoreboard?dates=20260319&limit=64',
-      'https://site.api.espn.com/apis/v2/sports/basketball/mens-college-basketball/scoreboard?dates=20260320&limit=64',
-      'https://site.api.espn.com/apis/v2/sports/basketball/mens-college-basketball/scoreboard?dates=20260321&limit=64',
-      'https://site.api.espn.com/apis/v2/sports/basketball/mens-college-basketball/scoreboard?dates=20260322&limit=64',
-      'https://site.api.espn.com/apis/v2/sports/basketball/mens-college-basketball/scoreboard?dates=20260323&limit=64',
+    // Fetch all tournament days in parallel (First Four through Final Four)
+    // First round: Mar 19-20, Second round: Mar 21-22,
+    // Sweet 16: Mar 26-27, Elite 8: Mar 28-29, FF: Apr 4-5, Champ: Apr 6
+    const days = [
+      '20260318','20260319','20260320','20260321','20260322','20260323',
+      '20260326','20260327','20260328','20260329',
+      '20260404','20260405','20260406',
     ];
 
-    const responses = await Promise.all(urls.map(u => fetch(u).then(r => r.json()).catch(() => null)));
+    const fetches = days.map(d =>
+      fetch(`https://site.api.espn.com/apis/v2/sports/basketball/mens-college-basketball/scoreboard?dates=${d}&limit=100`)
+        .then(r => r.ok ? r.json() : null)
+        .catch(() => null)
+    );
+
+    const allPages = await Promise.all(fetches);
 
     const winners = new Set();
     const losers  = new Set();
 
-    for (const data of responses) {
+    for (const data of allPages) {
       if (!data?.events) continue;
       for (const event of data.events) {
         const comp = event.competitions?.[0];
-        if (!comp || !event.status?.type?.completed) continue;
-        for (const competitor of comp.competitors) {
-          // Try multiple name fields ESPN may return
+        if (!comp) continue;
+        const completed = event.status?.type?.completed;
+        const inProgress = event.status?.type?.state === 'in';
+        if (!completed && !inProgress) continue;
+
+        for (const c of comp.competitors) {
+          // Collect every name variant ESPN returns so fuzzy matching hits
           const names = [
-            competitor.team?.shortDisplayName,
-            competitor.team?.displayName,
-            competitor.team?.location,
-            competitor.team?.name,
+            c.team?.shortDisplayName,
+            c.team?.displayName,
+            c.team?.location,
+            c.team?.name,
+            c.team?.abbreviation,
           ].filter(Boolean);
-          if (competitor.winner) names.forEach(n => winners.add(n));
-          else                   names.forEach(n => losers.add(n));
+
+          if (completed) {
+            if (c.winner) names.forEach(n => winners.add(n));
+            else          names.forEach(n => losers.add(n));
+          } else if (inProgress) {
+            // In-progress: mark as still playing (won't dim them)
+            names.forEach(n => winners.add(n));
+          }
         }
       }
     }
 
-    applyResults(winners, losers);
-
-    const wonCount  = document.querySelectorAll('.team.live-won').length;
-    const lostCount = document.querySelectorAll('.team.live-lost').length;
+    const matched = applyResults(winners, losers);
     const now = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
     status.className = 'sync-status ok';
-    status.textContent = `Last synced ${now} — ${wonCount} teams advancing, ${lostCount} eliminated`;
+    status.textContent = `Synced ${now} — ${matched.won} advancing ✓, ${matched.lost} eliminated ✗`;
 
   } catch (err) {
     status.className = 'sync-status error';
@@ -651,32 +650,57 @@ async function syncLive() {
   }
 }
 
+// ─── Fuzzy name matching ──────────────────────────────────────────────
+function nameMatches(ourName, espnName) {
+  // Normalize: lowercase, strip punctuation, collapse spaces
+  const norm = s => s.toLowerCase().replace(/[''']/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  const o = norm(ourName);
+  const e = norm(espnName);
+  if (o === e) return true;
+  // Strip parentheticals like "(CA)", "(OH)", "(FL)", "(NY)"
+  const eClean = e.replace(/\([^)]*\)/g, '').trim();
+  if (o === eClean) return true;
+  // One contains the other (minimum length guard to avoid false matches)
+  if (o.length >= 4 && e.startsWith(o)) return true;
+  if (e.length >= 4 && o.startsWith(e)) return true;
+  // "St. John's" ↔ "Saint John's" etc.
+  const abbrevMap = {
+    'st ': 'saint ', 'mt ': 'mount ', 'n ': 'north ', 's ': 'south ',
+    'e ': 'east ', 'w ': 'west ',
+  };
+  let oExp = o;
+  for (const [short, long] of Object.entries(abbrevMap)) {
+    if (o.startsWith(short)) { oExp = long + o.slice(short.length); break; }
+  }
+  if (oExp !== o && (eClean === oExp || e.startsWith(oExp))) return true;
+  return false;
+}
+
 // ─── Apply winners / losers to the DOM ───────────────────────────────
 function applyResults(winners, losers) {
-  function matches(ourName, espnName) {
-    const o = ourName.toLowerCase().trim();
-    const e = espnName.toLowerCase().trim();
-    // exact, or one contains the other (handles "Saint Mary's" vs "Saint Mary's (CA)")
-    return o === e || e.includes(o) || o.includes(e);
-  }
+  let wonCount = 0, lostCount = 0;
 
   document.querySelectorAll('.team[data-team]').forEach(el => {
-    const ourName  = el.dataset.team;
-    const iconEl   = el.querySelector('.result-icon');
+    const ourName = el.dataset.team;
+    const iconEl  = el.querySelector('.result-icon');
     el.classList.remove('live-won', 'live-lost');
     if (iconEl) iconEl.textContent = '';
 
-    const isWon  = [...winners].some(w => matches(ourName, w));
-    const isLost = [...losers ].some(l => matches(ourName, l));
+    const isWon  = [...winners].some(w => nameMatches(ourName, w));
+    const isLost = !isWon && [...losers].some(l => nameMatches(ourName, l));
 
     if (isWon) {
       el.classList.add('live-won');
       if (iconEl) iconEl.textContent = '✓';
+      wonCount++;
     } else if (isLost) {
       el.classList.add('live-lost');
       if (iconEl) iconEl.textContent = '✗';
+      lostCount++;
     }
   });
+
+  return { won: wonCount, lost: lostCount };
 }
 </script>
 </body>
