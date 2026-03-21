@@ -628,81 +628,85 @@ async function syncLive() {
   btn.disabled = true;
   icon.classList.add('spinning');
   status.className = 'sync-status';
-  status.textContent = 'Fetching live results from ESPN…';
+  status.textContent = 'Fetching live results…';
 
   try {
-    // Start with known results, then layer in ESPN data
     const winners = new Set(KNOWN.winners);
     const losers  = new Set(KNOWN.losers);
+    const sourcesHit = [];
 
-    // ESPN scoreboard — try both with and without date to maximise coverage.
-    // "completed" can appear as .completed=true OR .state==='post' depending
-    // on ESPN API version; we check both.
-    const urls = [
-      // No date = today's live/recent games
-      'https://site.api.espn.com/apis/v2/sports/basketball/mens-college-basketball/scoreboard?limit=200&groups=50',
-      // First round days
-      'https://site.api.espn.com/apis/v2/sports/basketball/mens-college-basketball/scoreboard?dates=20260319&limit=200&groups=50',
-      'https://site.api.espn.com/apis/v2/sports/basketball/mens-college-basketball/scoreboard?dates=20260320&limit=200&groups=50',
-      // Second round + beyond
-      'https://site.api.espn.com/apis/v2/sports/basketball/mens-college-basketball/scoreboard?dates=20260321&limit=200&groups=50',
-      'https://site.api.espn.com/apis/v2/sports/basketball/mens-college-basketball/scoreboard?dates=20260322&limit=200&groups=50',
-      'https://site.api.espn.com/apis/v2/sports/basketball/mens-college-basketball/scoreboard?dates=20260326&limit=200&groups=50',
-      'https://site.api.espn.com/apis/v2/sports/basketball/mens-college-basketball/scoreboard?dates=20260327&limit=200&groups=50',
-      'https://site.api.espn.com/apis/v2/sports/basketball/mens-college-basketball/scoreboard?dates=20260328&limit=200&groups=50',
-      'https://site.api.espn.com/apis/v2/sports/basketball/mens-college-basketball/scoreboard?dates=20260329&limit=200&groups=50',
-      'https://site.api.espn.com/apis/v2/sports/basketball/mens-college-basketball/scoreboard?dates=20260404&limit=200&groups=50',
-      'https://site.api.espn.com/apis/v2/sports/basketball/mens-college-basketball/scoreboard?dates=20260405&limit=200&groups=50',
-      'https://site.api.espn.com/apis/v2/sports/basketball/mens-college-basketball/scoreboard?dates=20260406&limit=200&groups=50',
+    // ── Source 1: henrygd NCAA API (mirrors ncaa.com, CORS-enabled) ────────
+    // Try the bracket endpoint first (one request = all rounds)
+    const bracketData = await fetch('https://ncaa-api.henrygd.me/brackets/basketball-men/d1/2026')
+      .then(r => r.ok ? r.json() : null).catch(() => null);
+
+    if (bracketData) {
+      const n = parseNCAA(bracketData, winners, losers);
+      if (n > 0) sourcesHit.push(`NCAA bracket (${n} results)`);
+    }
+
+    // Also hit the per-day scoreboard for any games not in the bracket feed
+    const tourneyDates = [
+      '03/18','03/19','03/20','03/21','03/22','03/23',
+      '03/26','03/27','03/28','03/29','04/04','04/05','04/06',
     ];
-
-    const pages = await Promise.all(
-      urls.map(u => fetch(u).then(r => r.ok ? r.json() : null).catch(() => null))
+    const scoreboards = await Promise.all(
+      tourneyDates.map(d =>
+        fetch(`https://ncaa-api.henrygd.me/scoreboard/basketball-men/d1/2026/${d}/scoreboard.json`)
+          .then(r => r.ok ? r.json() : null).catch(() => null)
+      )
     );
+    let sbCount = 0;
+    for (const sb of scoreboards) { if (sb) sbCount += parseNCAA(sb, winners, losers); }
+    if (sbCount > 0) sourcesHit.push(`NCAA scoreboard (${sbCount} games)`);
 
-    let espnEventCount = 0;
-    for (const data of pages) {
+    // ── Source 2: ESPN (no groups filter — catches what NCAA misses) ────────
+    const espnUrls = [
+      // today's live games (no date param)
+      'https://site.api.espn.com/apis/v2/sports/basketball/mens-college-basketball/scoreboard?limit=200',
+      ...['20260319','20260320','20260321','20260322','20260326',
+          '20260327','20260328','20260329','20260404','20260405','20260406'].map(d =>
+        `https://site.api.espn.com/apis/v2/sports/basketball/mens-college-basketball/scoreboard?dates=${d}&limit=200`
+      ),
+    ];
+    const espnPages = await Promise.all(
+      espnUrls.map(u => fetch(u).then(r => r.ok ? r.json() : null).catch(() => null))
+    );
+    let espnCount = 0;
+    for (const data of espnPages) {
       if (!data?.events) continue;
-      espnEventCount += data.events.length;
       for (const event of data.events) {
         const comp = event.competitions?.[0];
         if (!comp) continue;
-
-        // ESPN uses different flags depending on API version
-        const state = event.status?.type?.state;        // 'pre' | 'in' | 'post'
+        const state  = event.status?.type?.state;
         const isDone = event.status?.type?.completed === true || state === 'post';
         const isLive = state === 'in';
         if (!isDone && !isLive) continue;
-
         for (const c of comp.competitors) {
-          const names = [
-            c.team?.shortDisplayName,
-            c.team?.displayName,
-            c.team?.location,
-            c.team?.name,
-          ].filter(Boolean);
-
+          const names = [c.team?.shortDisplayName, c.team?.displayName,
+                         c.team?.location, c.team?.name].filter(Boolean);
           if (isDone) {
             if (c.winner) names.forEach(n => winners.add(n));
             else          names.forEach(n => losers.add(n));
           } else {
-            names.forEach(n => winners.add(n)); // live = still playing
+            names.forEach(n => winners.add(n));
           }
+          espnCount++;
         }
       }
     }
+    if (espnCount > 0) sourcesHit.push(`ESPN (${espnCount} teams)`);
 
-    console.log(`[sync] ESPN events found: ${espnEventCount} | winners: ${winners.size} | losers: ${losers.size}`);
-    console.log('[sync] winners sample:', [...winners].slice(0, 10));
-    console.log('[sync] losers sample:', [...losers].slice(0, 10));
+    console.log('[sync] sources:', sourcesHit.join(', '));
+    console.log('[sync] winners:', [...winners].slice(0,15));
+    console.log('[sync] losers:',  [...losers].slice(0,15));
 
-    // Re-render bracket with updated round advancement, then apply styling
     renderBracket(losers);
     const matched = applyResults(winners, losers);
     const now = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
-    const espnNote = espnEventCount > 0 ? ` (+${espnEventCount} ESPN events)` : ' (ESPN unavailable – using known results)';
+    const src  = sourcesHit.length ? ` · ${sourcesHit.join(', ')}` : ' · known results only';
     status.className = 'sync-status ok';
-    status.textContent = `Synced ${now} — ${matched.won} advancing ✓, ${matched.lost} eliminated ✗${espnNote}`;
+    status.textContent = `Synced ${now} — ${matched.won} advancing ✓, ${matched.lost} eliminated ✗${src}`;
 
   } catch (err) {
     // Even on error, apply what we know
@@ -719,6 +723,56 @@ async function syncLive() {
 
 // Auto-sync on page load
 window.addEventListener('DOMContentLoaded', () => setTimeout(syncLive, 800));
+
+// ─── NCAA data parsers (henrygd API mirrors ncaa.com format) ─────────
+// Handles both scoreboard.json and bracket endpoint responses.
+// Returns number of game results successfully parsed.
+function parseNCAA(data, winners, losers) {
+  let count = 0;
+
+  // Walk any object recursively collecting game nodes
+  function walk(node) {
+    if (!node || typeof node !== 'object') return;
+
+    // Scoreboard format: { scoreboard: { games: [ { game: { teams, gameState } } ] } }
+    const gameState = node.gameState || node.game_state || '';
+    const isFinal   = /final/i.test(gameState) || gameState === 'F';
+
+    if (isFinal && (node.teams || node.home || node.away)) {
+      // Try { teams: { home, away } } structure
+      const home = node.teams?.home ?? node.home;
+      const away = node.teams?.away ?? node.away;
+      if (home && away) {
+        const hName = home.names?.short ?? home.name ?? home.nameShort ?? '';
+        const aName = away.names?.short ?? away.name ?? away.nameShort ?? '';
+        const hWon  = home.winner === true || home.winner === 'W';
+        const aWon  = away.winner === true || away.winner === 'W';
+        if (hName) { (hWon ? winners : losers).add(hName); count++; }
+        if (aName) { (aWon ? winners : losers).add(aName); count++; }
+        return; // don't recurse into resolved game
+      }
+      // Try array-of-teams structure
+      if (Array.isArray(node.teams)) {
+        for (const t of node.teams) {
+          const nm = t.names?.short ?? t.name ?? t.nameShort ?? '';
+          const won = t.winner === true || t.winner === 'W';
+          if (nm) { (won ? winners : losers).add(nm); count++; }
+        }
+        return;
+      }
+    }
+
+    // Recurse into arrays and objects
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+    } else {
+      Object.values(node).forEach(v => { if (v && typeof v === 'object') walk(v); });
+    }
+  }
+
+  walk(data);
+  return count;
+}
 
 // ─── Fuzzy name matching ──────────────────────────────────────────────
 function nameMatches(ourName, espnName) {
