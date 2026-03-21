@@ -13,7 +13,7 @@
             "args": [
                 "--teams", "inputs/teams.csv",
                 "--bracket", "inputs/bracket_2026.csv",
-                "--iterations", "1000"            ]
+                "--iterations", "100000"            ]
         },
         {
             "name": "Python Debugger: Current File",
